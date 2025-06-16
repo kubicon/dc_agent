@@ -151,6 +151,7 @@ class DarkChessTest:
     self.test_public_observation_queen()
     self.test_public_observation_knight()
     self.test_public_observation_king()
+    self.test_public_observation_pawn()
     # self.test_public_observation_tensor()
   
   def test_fen_parsing_standard_position(self):
@@ -1958,6 +1959,114 @@ class DarkChessTest:
               
           
     print("✓ Public observation king test passed")
+    
+  def test_public_observation_pawn(self):
+    empty_fen = "8/8/8/8/8/8/8/8 w - - 0 1"
+    for pl in range(2):
+      pl_offset = 0 if pl == 0 else 6
+      pl_y_offset = -1 if pl == 0 else 1 
+  
+      pl_type = "P" if pl == 0 else "p"
+      opp_types = ["p", "r", "n", "b", "q", "k"] if pl == 0 else ["P", "R", "N", "B", "Q", "K"]
+      for id_type, opp_type in enumerate(opp_types):
+        for y in range(8): 
+          for x in range(8):
+            single_pawn_fen = replace_in_fen(empty_fen, pl_type, [y, x]) 
+            for y2 in range(y-1, y+2):
+              for x2 in range(x-1, x+2):
+                if y2 < 0 or y2 >= 8 or x2 < 0 or x2 >= 8 or (y2 == y and x2 == x):
+                  continue
+                single_pawn_fen = replace_in_fen(single_pawn_fen, opp_type, [y2, x2]) 
+            single_pawn_state = translate_fen(single_pawn_fen)
+            single_pawn = self.game8.public_observation_tensor(single_pawn_state)
+            if id_type == 1 or id_type == 2 or (y == 0 and pl == 0) or (y == 7 and pl == 1):
+              # Do not see opponents pieces
+              assert jnp.all(single_pawn[0:13] == 0), "No other pieces"
+              assert jnp.sum(single_pawn[13]) == 64, "Should be 63 non-visible tiles" 
+            else:
+              assert jnp.all(single_pawn[0] == 0), "Do not see empty spaces"
+              assert single_pawn[1 + pl_offset, y, x] == 1, "Should see own piece"
+              assert jnp.sum(single_pawn[1 + pl_offset]) == 1, "Should see own piece"
+              assert jnp.all(single_pawn[2+pl_offset:7+pl_offset] == 0), "No other pieces of player"
+              seen_tiles = 1
+              if x > 0:
+                seen_tiles += 1
+                assert single_pawn[id_type + 7 - pl_offset, y+pl_y_offset, x -1] == 1, "Should see opponent piece"
+                assert single_pawn[13, y+pl_y_offset, x - 1] == 0, "Should not see own piece"
+              if x < 7:
+                seen_tiles += 1
+                assert single_pawn[id_type + 7 - pl_offset, y+pl_y_offset, x +1] == 1, "Should see opponent piece"
+                assert single_pawn[13, y+pl_y_offset, x + 1] == 0, "Should not see own piece"
+                
+              assert jnp.sum(single_pawn[13]) == 64 - seen_tiles, "Should see seen tiles" 
+              
+             
+            
+      for other_id_type, other_type in enumerate(["P", "R", "N", "B", "Q", "K", "p", "r", "n", "b", "q", "k"]): 
+        for y in range(8):
+          for x in range(8):
+            single_opponent_fen = replace_in_fen(empty_fen, pl_type, [y, x])
+            for y2 in range(y-1, y+2):
+              for x2 in range(x-1, x+2):
+                if y2 < 0 or y2 >= 8 or x2 < 0 or x2 >= 8 or (y2 == y and x2 == x):
+                  continue
+                single_opponent_temp_fen = replace_in_fen(single_opponent_fen, other_type, [y2, x2])
+                single_opponent_state = translate_fen(single_opponent_temp_fen)
+                single_opponent = self.game8.public_observation_tensor(single_opponent_state)
+                if (pl == 0 and (other_type == "p" or other_type == "b" or other_type == "q" or other_type == "k") and y2 == y-1 and (x2 == x-1 or x2 == x+1)):
+                  assert jnp.all(single_opponent[0] == 0), "No empty places"
+                  assert jnp.all(single_opponent[2:7] == 0), "No other P1 piece"
+                  assert jnp.all(single_opponent[7:1+other_id_type] == 0), "No other P2 piece"
+                  assert jnp.all(single_opponent[2+other_id_type:13] == 0), "No other P2 piece"
+                  assert jnp.sum(single_opponent[13]) == 62, "Should be 63 non-visible tiles"
+                  if x2 == x-1:
+                    assert single_opponent[1 + pl_offset, y, x] == 1, "Should see own piece"
+                    assert single_opponent[1 + other_id_type, y2, x2] == 1, "Should see opponent piece"
+                  elif x2 == x+1:
+                    assert single_opponent[1 + pl_offset, y, x] == 1, "Should see own piece"
+                    assert single_opponent[1 + other_id_type, y2, x2] == 1, "Should see opponent piece"  
+                    
+                elif (pl == 1 and (other_type == "P" or other_type == "B" or other_type == "Q" or other_type == "K") and y2 == y+1 and (x2 == x-1 or x2 == x+1)):
+                  assert jnp.all(single_opponent[0] == 0), "No empty places"
+                  assert jnp.all(single_opponent[1:1+other_id_type] == 0), "No other P1 piece"
+                  assert jnp.all(single_opponent[2+other_id_type:7] == 0), "No other P2 piece"
+                  assert jnp.all(single_opponent[8:13] == 0), "No other P2 piece"
+                  assert jnp.sum(single_opponent[13]) == 62, "Should be 63 non-visible tiles"
+                  if x2 == x-1:
+                    assert single_opponent[1 + pl_offset, y, x] == 1, "Should see own piece"
+                    assert single_opponent[1 + other_id_type, y2, x2] == 1, "Should see opponent piece"
+                  elif x2 == x+1:
+                    assert single_opponent[1 + pl_offset, y, x] == 1, "Should see own piece"
+                    assert single_opponent[1 + other_id_type, y2, x2] == 1, "Should see opponent piece"  
+                    
+                else: 
+                  assert jnp.all(single_opponent[0:13] == 0), "No other pieces"
+                  assert jnp.all(single_opponent[13] == 1), "Should be 64 non-visible tiles"
+            
+      for other_type in ["p", "r", "n", "b", "q", "k", "P", "R", "N", "B", "Q", "K"]:
+        for y in range(8):
+          for x in range(8):
+            surround_fen = replace_in_fen(empty_fen, pl_type, [y, x])
+            for y2 in range(8):
+              for x2 in range(8):
+                if y2 >= y -1 and y2 <= y + 1 and x2 >= x - 1 and x2 <= x + 1:
+                  continue
+                surround_fen = replace_in_fen(surround_fen, other_type, [y2, x2])
+            surround_state = translate_fen(surround_fen)
+            surround = self.game8.public_observation_tensor(surround_state)
+            assert jnp.all(surround[0:13] == 0), "No other pieces"
+        assert jnp.all(surround[13] == 1), "Should be 63 non-visible tiles"
+        
+        
+        
+        
+    print("✓ Public observation pawn test passed")
+              
+              
+              
+              
+          
+          
 
 if __name__ == "__main__":
   test = DarkChessTest()
