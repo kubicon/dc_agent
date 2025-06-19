@@ -26,10 +26,11 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
-from cfr.utils import JaxPolicy, stringify
-from jax_chess import DarkChessGame, DarkChessGameState, Pieces
+from cfr.utils import JaxPolicy, stringify, num_distinct_actions
+from jax_chess import DarkChessGame, DarkChessGameState
 
 JAX_CFR_SIMULTANEOUS_UPDATE = -5
+
 TERMINAL_PLAYER_ID = -4
 
 
@@ -57,38 +58,6 @@ def update_regrets_plus(regret):
 def update_regrets(regret):
   """Updates the regrets without CFRPlus."""
   return regret
-
-def num_distinct_actions(game: DarkChessGame):
-  """Computes an upper bound on the number of
-  actions applicable in the given game instance"""
-  board = game.init_state.board
-  board_max_dim = max(board.shape)
-  #for each type of piece 
-  # take the maximum amount across both players.
-  # The kings are exception, where we 
-  # assume each player has exactly one king
-  num_pawns = jnp.maximum(jnp.sum(board == Pieces.WHITE_PAWN), jnp.sum(board == Pieces.BLACK_PAWN))
-  # Each pawn can be potentially promoted to either of these pieces
-  num_knights = jnp.maximum(jnp.sum(board == Pieces.WHITE_KNIGHT), jnp.sum(board == Pieces.BLACK_KNIGHT)) + num_pawns
-  num_rooks = jnp.maximum(jnp.sum(board == Pieces.WHITE_ROOK), jnp.sum(board == Pieces.BLACK_ROOK)) + num_pawns
-  num_bishops = jnp.maximum(jnp.sum(board == Pieces.WHITE_BISHOP), jnp.sum(board == Pieces.BLACK_BISHOP)) + num_pawns
-  num_queens = jnp.maximum(jnp.sum(board == Pieces.WHITE_QUEEN), jnp.sum(board == Pieces.BLACK_QUEEN)) + num_pawns
-  #Castling is allowed only for 8x8 board
-  castling_allowed = int(board.shape[0] == 8 and board.shape[1] == 8)
-  #Each pawn has in total 4 total possible moves
-  #1 forward, 2 forward, and 2 diagonal.
-  pawn_actions = 4 * num_pawns
-  #knights can jump only to 8 places at max
-  knight_actions = 8 * num_knights
-  # rooks and bishops can each move in 4 directions,
-  # each no longer than the bigger dimension of board - 1
-  rook_actions, bishop_actions = num_rooks * (4 * (board_max_dim - 1)),  num_bishops * (4 * (board_max_dim - 1))
-  # queens the same except 8 directions
-  queen_actions = num_queens * (8 * (board_max_dim - 1))
-  king_actions = 8
-  #This is a  VERY pessimistic estimate, most of these will not be legal 
-  total_actions = int(castling_allowed + pawn_actions + knight_actions + rook_actions + bishop_actions + queen_actions + king_actions)
-  return total_actions
 
 
 @chex.dataclass(frozen=True)
@@ -194,8 +163,6 @@ class JaxDarkChessCFR:
     iset_action_depth = [[] for _ in range(players)]
     ids = [0 for _ in range(players)]
     pl_isets = [{} for _ in range(players)]
-    #depth_history_action_map = [[] for _ in range(players)]
-    #depth_history_action_ids = [[] for _ in range(players)]
     #Per iset. Needed to reconstruct the policy for the original game
     self.ids_to_action = [[] for _ in range(players)]
     #For the reconstruction in the original game
@@ -228,8 +195,6 @@ class JaxDarkChessCFR:
           depth_history_previous_action[pl].append([])
           depth_history_iset[pl].append([])
           depth_history_actions[pl].append([])
-          #depth_history_action_map[pl].append([])
-          #depth_history_action_ids[pl].append(0)
 
         depth_history_action_mask.append([])
         depth_history_next_history.append([])
@@ -256,8 +221,8 @@ class JaxDarkChessCFR:
         if ai not in actions_to_id:
           actions_to_id[ai] = action_id
           action_id += 1
+          id_to_actions[action_id] = ai
         ai_mapped = actions_to_id[ai]
-        id_to_actions[ai_mapped] = ai
         actions_mask[ai_mapped] = 1
       depth_history_action_mask[depth].append(actions_mask)
       for pl in range(players):
@@ -411,7 +376,7 @@ class JaxDarkChessCFR:
       self.update_regrets = jax.vmap(update_regrets, 0, 0)
 
     self.iset_map = pl_isets
-    check_constants_shapes(self.constants)
+    #check_constants_shapes(self.constants)
 
 
   def multiple_steps(self, iterations: int):
