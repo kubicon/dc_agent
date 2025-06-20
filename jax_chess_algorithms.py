@@ -20,7 +20,7 @@ def expected_value(policy: JaxPolicy, game: DarkChessGame, depth_limit:int) -> f
     init_state, init_legals = game.new_initial_state()
     eps = 1e-6 # Cut off trajectories with reach probability less than this
 
-    def get_value(state:DarkChessGameState, legal_actions, reward, terminal, reach, trajectory_return, trajectory_actions, depth):
+    def get_value(state:DarkChessGameState, legal_actions, reward, terminal, reach, trajectory_return, depth):
         legal_actions = np.asarray(legal_actions)
         trajectory_return += reward
         if terminal or (depth_limit > 0 and depth == depth_limit):
@@ -36,12 +36,12 @@ def expected_value(policy: JaxPolicy, game: DarkChessGame, depth_limit:int) -> f
             action_prob = state_pols[ai]
             new_reach = reach * action_prob
             #cut off the low reaches
-            if reach < eps:
+            if new_reach < eps:
                 continue
-            new_trajectory_actions = trajectory_actions + [ai]
-            state_value += get_value(*game.apply_action(state, ai), new_reach, trajectory_return, new_trajectory_actions, depth + 1)
+            new_state, new_legals, reward, terminal = game.apply_action(state, ai)
+            state_value += get_value(new_state, new_legals, reward, terminal, new_reach, trajectory_return, depth + 1)
         return state_value
-    init_state_value = get_value(init_state, init_legals, 0, False, 1, 0, [], 0)
+    init_state_value = get_value(init_state, init_legals, 0, False, 1, 0 ,0)
     return init_state_value
 
 
@@ -172,12 +172,13 @@ def best_responses(policy: JaxPolicy, game: DarkChessGame, depth_limit:int) -> t
         for i, iset in enumerate(depth_iset_map[d]):
             #need to remap back to full game actions shape
             iset_policy = np.zeros(full_game_actions)
-            real_action = depth_id_to_action[d][i][int(pl_br_action[i])]()
+            real_action = depth_id_to_action[d][i][int(pl_br_action[i])]
             iset_policy[real_action] = 1
             acting_policy[iset] = iset_policy
         pl_history_br = pl_br_action[depth_iset[d]] #H(D)
-        state_br_value = np.squeeze(np.take_along_axis(pl_action_value, pl_history_br[..., None], axis=-1))
-        state_value = np.sum(pl_next_br_action_value * depth_behaviour_policies[d], axis=-1)
+        #breakpoint()
+        state_br_value = np.squeeze(np.take_along_axis(pl_action_value, pl_history_br[..., None], axis=-1)) #H{D}
+        state_value = np.sum(pl_next_br_action_value * depth_behaviour_policies[d], axis=-1) #H(D)
 
     if starting_player == 0:
         p1_br_val, p2_br_val = state_br_value.item(), -state_value.item()

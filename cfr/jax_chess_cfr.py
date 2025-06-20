@@ -213,14 +213,13 @@ class JaxDarkChessCFR:
       depth_history_previous_history[depth].append(previous_info.history)
       actions_mask = [0] * distinct_actions
       actions_to_id = {}
-      action_id = 0
       id_to_actions = {}
       for ai, a in enumerate(legal_actions):
         if a < 0.5:
           continue
         if ai not in actions_to_id:
+          action_id = len(actions_to_id)
           actions_to_id[ai] = action_id
-          action_id += 1
           id_to_actions[action_id] = ai
         ai_mapped = actions_to_id[ai]
         actions_mask[ai_mapped] = 1
