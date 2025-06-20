@@ -156,8 +156,8 @@ def best_responses(policy: JaxPolicy, game: DarkChessGame, depth_limit:int) -> t
     state_value = np.zeros(1)
     state_br_value = np.zeros(1)
     max_depth = len(depth_iset)
-    #player at maximum depth 
-    player = starting_player + (max_depth % 2) 
+    #player playing at the last decision node
+    player = starting_player + ((max_depth - 1) % 2) 
     for d in range(max_depth -1, -1, -1):
         #for when best_responding now
         pl_action_value = np.where(depth_continuations[d] < 0, depth_utilites[d], state_value[depth_continuations[d]]) #[H(D), A]
@@ -179,10 +179,13 @@ def best_responses(policy: JaxPolicy, game: DarkChessGame, depth_limit:int) -> t
         #breakpoint()
         state_br_value = np.squeeze(np.take_along_axis(pl_action_value, pl_history_br[..., None], axis=-1)) #H{D}
         state_value = np.sum(pl_next_br_action_value * depth_behaviour_policies[d], axis=-1) #H(D)
+        player = 1 - player
 
     if starting_player == 0:
         p1_br_val, p2_br_val = state_br_value.item(), -state_value.item()
     else:
         p1_br_val, p2_br_val = state_value.item(), -state_br_value.item()
+
+    #breakpoint()
 
     return p2_br, p1_br, p2_br_val, p1_br_val

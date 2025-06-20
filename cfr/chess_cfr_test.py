@@ -87,8 +87,8 @@ def immediate_win_test(args):
 
 def main():
   args = parser.parse_args()
-  #two_knights_each_test(args)
-  early_win_test(args)
+  two_knights_each_test(args)
+  #early_win_test(args)
   #immediate_win_test(args)
 
 
