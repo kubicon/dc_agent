@@ -12,8 +12,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""A simultaneous version of JAX-CFR, which is made to
-work specifically on the jax implementation of Leduc Poker
+"""A version of CFR using jitted updates, similarly
+to JAX-CFR from openspiel, but specifically made for
+DarkChessGame
 """
 
 # pylint: disable=g-importing-member
@@ -29,16 +30,14 @@ import numpy as np
 from cfr.utils import JaxPolicy, stringify, num_distinct_actions
 from jax_chess import DarkChessGame, DarkChessGameState
 
-JAX_CFR_SIMULTANEOUS_UPDATE = -5
-
 TERMINAL_PLAYER_ID = -4
-
+JAX_CFR_SIMULTANEOUS_UPDATE = -5
 
 def regret_matching(regret, mask):
   """Computes current policy based on current regrets.
 
   Args:
-    regret: Current regrets in array Fkiat[Isets, Actions]
+    regret: Current regrets in array Float[Isets, Actions]
     mask: Legal action mask Bool[Isets, Actions]
 
   Returns:
@@ -81,6 +80,7 @@ class JaxCFRConstants:
   depth_history_player: chex.ArrayTree = ()
   depth_history_previous_history: chex.ArrayTree = ()
   depth_history_action_mask: chex.ArrayTree = ()
+  depth_history_chance_probabilities: chex.ArrayTree = () #Needed for correct handling of terminals now
 
   iset_previous_action: chex.ArrayTree = ()
   iset_action_mask: chex.ArrayTree = ()
@@ -120,6 +120,8 @@ class JaxDarkChessCFR:
   """A JaxCFR as implemented in OpenSpiel, created 
   for full game solving of DarkChessGame. Unlike other JaxGame games,
    DarkChess are treated as a turn-based game inherently.
+   Because we do not have full isets in chess, it might
+   not be optimal due to imperfect recall.
 
   First it prepares all the structures in `init`, then it just reuses them
   within jitted function `jit_step`.
@@ -154,6 +156,7 @@ class JaxDarkChessCFR:
     depth_history_iset = [[] for _ in range(players)]
     depth_history_actions = [[] for _ in range(players)]
     depth_history_next_history = []
+    depth_history_chance_probabilities = []
     depth_history_player = []
     depth_history_previous_history = []
     depth_history_action_mask = []
@@ -163,6 +166,7 @@ class JaxDarkChessCFR:
     iset_action_depth = [[] for _ in range(players)]
     ids = [0 for _ in range(players)]
     pl_isets = [{} for _ in range(players)]
+    self.iset_depth = [[] for _ in range(players)]
     #Per iset. Needed to reconstruct the policy for the original game
     self.ids_to_action = [[] for _ in range(players)]
     #For the reconstruction in the original game
@@ -173,6 +177,7 @@ class JaxDarkChessCFR:
 
     for pl in range(players):
       pl_isets[pl][''] = ids[pl]
+      self.iset_depth[pl].append(0)
       ids[pl] += 1
       am = [0] * distinct_actions
       am[0] = 1
@@ -201,14 +206,21 @@ class JaxDarkChessCFR:
         depth_history_utility.append([])
         depth_history_player.append([])
         depth_history_previous_history.append([])
+        depth_history_chance_probabilities.append([])
       history_id = len(depth_history_previous_history[depth])
       next_history_temp = [0] * distinct_actions
       depth_history_next_history[depth].append(next_history_temp)
       #cut off the nodes at depth limit
       if terminal or depth == self.depth_limit:
         current_player = TERMINAL_PLAYER_ID
+        depth_history_chance_probabilities[depth].append(
+            np.ones(distinct_actions, dtype=float) / distinct_actions
+        )
       else :
         current_player = int(state.current_player)
+        depth_history_chance_probabilities[depth].append(
+            np.ones(distinct_actions, dtype=float)
+        )
       depth_history_player[depth].append(current_player)
       depth_history_previous_history[depth].append(previous_info.history)
       actions_mask = [0] * distinct_actions
@@ -240,6 +252,7 @@ class JaxDarkChessCFR:
           if pl == current_player:
             if iset not in pl_isets[pl]:
               pl_isets[pl][iset] = ids[pl]
+              self.iset_depth[pl].append(depth)
               ids[pl] += 1
               self.ids_to_action[state.current_player].append(id_to_actions)
               iset_previous_action[pl].append(previous_info.actions[pl])
@@ -328,6 +341,9 @@ class JaxDarkChessCFR:
         depth_history_previous_action
     )
     depth_history_action_mask = convert_to_jax(depth_history_action_mask)
+    depth_history_chance_probabilities = convert_to_jax(
+        depth_history_chance_probabilities
+)
 
     depth_history_next_history = convert_to_jax(depth_history_next_history)
     depth_history_player = convert_to_jax(depth_history_player)
@@ -356,6 +372,7 @@ class JaxDarkChessCFR:
         depth_history_player=depth_history_player,
         depth_history_previous_history=depth_history_previous_history,
         depth_history_action_mask=depth_history_action_mask,
+        depth_history_chance_probabilities=depth_history_chance_probabilities,
         iset_previous_action=iset_previous_action,
         iset_action_mask=iset_action_mask,
         iset_action_depth=iset_action_depth,
@@ -482,8 +499,7 @@ class JaxDarkChessCFR:
         for pl in range(self.constants.players)
     ]
     for i in range(self.constants.max_depth - 2, -1, -1):
-      #here was chance original this is why the 1. Dark chess dont have chance.
-      each_history_policy = jnp.ones(self.constants.depth_history_player[i][..., jnp.newaxis].shape)
+      each_history_policy = self.constants.depth_history_chance_probabilities[i]
       for pl in range(self.constants.players):
         each_history_policy = each_history_policy * jnp.where(
             self.constants.depth_history_player[i][..., jnp.newaxis] == pl,
@@ -554,18 +570,31 @@ class JaxDarkChessCFR:
         averages[pl] / np.sum(averages[pl], -1, keepdims=True)
         for pl in range(self.constants.players)
     ]
+    def convert_to_numpy_depth(x):
+      return [np.asarray(y) for y in x]
+    
     avg_strategy = JaxPolicy()
+    per_depth_averages = [[] for d in range(self.constants.max_depth)]
+    per_depth_regrets = [[] for d in range(self.constants.max_depth)]
+    per_depth_iset_legals = [[] for d in range(self.constants.max_depth)]
 
     for pl in range(2):
       for iset, idx in self.iset_map[pl].items():
         if not iset:
           continue
-        state_policy = np.zeros(self.full_game_distinct_actions, dtype=float)
+        cur_iset_depth = self.iset_depth[pl][idx]
+        per_depth_averages[cur_iset_depth].append(averages[pl][idx])
+        per_depth_regrets[cur_iset_depth].append(self.regrets[pl][idx])
+        per_depth_iset_legals[cur_iset_depth].append(self.constants.iset_action_mask[pl][idx])
+        iset_policy = np.zeros(self.full_game_distinct_actions, dtype=float)
         for id, action in self.ids_to_action[pl][idx].items():
-          state_policy[action] = averages[pl][idx][id]
+          iset_policy[action] = averages[pl][idx][id]
         #rather renormalize so that numpy does not complain
-        total = np.sum(state_policy)
-        state_policy = np.where(total > 0, state_policy / total, 0)
-        avg_strategy[iset] = state_policy
-    return avg_strategy
+        total = np.sum(iset_policy)
+        iset_policy = np.where(total > 0, iset_policy / total, 0)
+        avg_strategy[iset] = iset_policy
+    per_depth_averages = convert_to_numpy_depth(per_depth_averages)
+    per_depth_regrets = convert_to_numpy_depth(per_depth_regrets)
+    per_depth_iset_legals = convert_to_numpy_depth(per_depth_iset_legals)
+    return avg_strategy#, per_depth_averages, per_depth_regrets, per_depth_iset_legals
 
